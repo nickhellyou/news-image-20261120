@@ -1,44 +1,61 @@
 #!/usr/bin/env python3
-"""Entry program for make.fun news-image-20261120.
+"""Publish the news-image entry to the make.fun output directory.
 
-The front page image (1024x1024, 40 stories from Friday 20 November
-2026, drawn with PIL in the work session) is baked into the repository
-as entry.png. This program only copies those exact bytes to the output
-path, so both sandbox runs write byte-identical files. Standard library
-only; no network, no clock, no randomness.
+The entry artwork lives next to this script as ``entry.png``.  This program
+simply stages a verified copy of it where the harness expects the output:
+the directory named by ``MAKEFUN_OUTPUT_DIR`` (``/output`` when unset).
+
+Before copying, the artwork is checked so a broken or oversized file can
+never be submitted by accident:
+
+* it must start with the eight PNG magic bytes, and
+* it must be no larger than 1 MiB.
 """
+
 import hashlib
 import os
 import shutil
 import sys
-from pathlib import Path
 
-SOURCE_NAME = "entry.png"
-MAX_BYTES = 1048576
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+MAX_BYTES = 1 * 1024 * 1024
+SOURCE_NAME = "entry.png"
 
 
-def main() -> int:
-    here = Path(__file__).resolve().parent
-    source = here / SOURCE_NAME
-    out_dir = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
-    target = out_dir / "entry.png"
+def fail(message):
+    """Print an error to stderr and exit non-zero."""
+    print(f"error: {message}", file=sys.stderr)
+    sys.exit(1)
 
-    data = source.read_bytes()
-    if len(data) > MAX_BYTES:
-        print(f"entry.png is {len(data)} bytes, over the 1 MiB limit", file=sys.stderr)
-        return 1
+
+def main():
+    here = os.path.dirname(os.path.abspath(__file__))
+    source = os.path.join(here, SOURCE_NAME)
+
+    if not os.path.isfile(source):
+        fail(f"missing artwork: {source} not found")
+
+    with open(source, "rb") as handle:
+        data = handle.read()
+
     if not data.startswith(PNG_MAGIC):
-        print("entry.png is not a PNG file", file=sys.stderr)
-        return 1
-    if len(data) < 1000:
-        print("entry.png looks truncated", file=sys.stderr)
-        return 1
+        fail(f"{SOURCE_NAME} does not start with PNG magic bytes")
+    if len(data) > MAX_BYTES:
+        fail(f"{SOURCE_NAME} is {len(data)} bytes, over the 1 MiB limit")
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
+    os.makedirs(out_dir, exist_ok=True)
+    target = os.path.join(out_dir, SOURCE_NAME)
     shutil.copyfile(source, target)
-    digest = hashlib.sha256(target.read_bytes()).hexdigest()
-    print(f"wrote {target} ({len(data)} bytes, sha256 {digest})")
+
+    # Verify the copy landed intact before reporting success.
+    with open(target, "rb") as handle:
+        copied = handle.read()
+    if hashlib.sha256(copied).hexdigest() != hashlib.sha256(data).hexdigest():
+        fail(f"copy verification failed for {target}")
+
+    digest = hashlib.sha256(data).hexdigest()
+    print(f"wrote {target} ({len(data)} bytes, sha256 {digest[:12]}...)")
     return 0
 
 
